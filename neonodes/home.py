@@ -92,56 +92,85 @@ class HomeWidget(Widget):
         result = Text()
         width = self.size.width or 80
 
-        # --- Header ---
+        # Column widths
+        TW = 38   # title col inner width
+        CW = 10   # topic col inner width
+        DW = 10   # difficulty col inner width
+        # total table width = 1 + TW + 1 + 1 + CW + 1 + 1 + DW + 1 = TW+CW+DW+7
+        table_w = TW + CW + DW + 7
+
+        # indent to center the table
+        pad = max(0, (width - table_w) // 2)
+        P = " " * pad
+
+        # ── Header ──────────────────────────────────────────────────────
         result.append("\n\n")
-        title = "neonodes"
-        result.append(title.center(width) + "\n", style=f"bold {BLUE}")
-        subtitle = "algorithm visualizer"
-        result.append(subtitle.center(width) + "\n", style=DIM)
+        result.append("neonodes".center(width) + "\n", style=f"bold {BLUE}")
+        result.append("algorithm visualizer".center(width) + "\n", style=DIM)
         result.append("\n")
 
-        # --- Divider ---
-        result.append("  " + "─" * (width - 4) + "\n", style=BORDER)
+        # ── Filters as dropdowns ────────────────────────────────────────
+        topic_val = f" {self._topic} ▾ "
+        diff_val  = f" {self._difficulty} ▾ "
+
+        result.append(P + "  topic  ", style=DIM)
+        result.append(f"┌{'─' * (len(topic_val))}┐", style=BORDER)
+        result.append("      difficulty  ", style=DIM)
+        result.append(f"┌{'─' * (len(diff_val))}┐", style=BORDER)
         result.append("\n")
 
-        # --- Topic filter ---
-        result.append("  topic      ", style=DIM)
-        for t in TOPICS:
-            if t == self._topic:
-                result.append(f" {t} ", style=f"bold {BLUE} on {SEL_BG}")
-            else:
-                result.append(f" {t} ", style=DIM)
-            result.append(" ")
+        result.append(P + "         ", style=DIM)
+        result.append("│", style=BORDER)
+        result.append(topic_val, style=f"bold {BLUE} on {SEL_BG}")
+        result.append("│", style=BORDER)
+        result.append("                  ", style=DIM)
+        result.append("│", style=BORDER)
+        diff_color = DIFF_COLORS.get(self._difficulty, BLUE)
+        result.append(diff_val, style=f"bold {diff_color} on {SEL_BG}")
+        result.append("│", style=BORDER)
         result.append("\n")
 
-        # --- Difficulty filter ---
-        result.append("  difficulty ", style=DIM)
-        for d in DIFFICULTIES:
-            if d == self._difficulty:
-                active_color = DIFF_COLORS.get(d, BLUE)
-                result.append(f" {d} ", style=f"bold {active_color} on {SEL_BG}")
-            else:
-                result.append(f" {d} ", style=DIM)
-            result.append(" ")
-        result.append("\n")
+        result.append(P + "         ", style=DIM)
+        result.append(f"└{'─' * (len(topic_val))}┘", style=BORDER)
+        result.append("                  ", style=DIM)
+        result.append(f"└{'─' * (len(diff_val))}┘", style=BORDER)
+        result.append("\n\n")
 
-        result.append("\n")
+        # ── Table ───────────────────────────────────────────────────────
+        def row_sep(left: str, mid1: str, mid2: str, right: str) -> None:
+            result.append(P + left + "─" * (TW + 2) + mid1 +
+                          "─" * (CW + 2) + mid2 +
+                          "─" * (DW + 2) + right + "\n", style=BORDER)
 
-        # --- Divider ---
-        result.append("  " + "─" * (width - 4) + "\n", style=BORDER)
-        result.append("\n")
+        def cell(text: str, w: int, style: str) -> None:
+            result.append(" " + text[:w].ljust(w) + " ", style=style)
 
-        # --- Problem list ---
+        # Top border
+        row_sep("┌", "┬", "┬", "┐")
+
+        # Header row
+        result.append(P + "│", style=BORDER)
+        cell("problem", TW, f"bold {DIM}")
+        result.append("│", style=BORDER)
+        cell("topic", CW, f"bold {DIM}")
+        result.append("│", style=BORDER)
+        cell("difficulty", DW, f"bold {DIM}")
+        result.append("│\n", style=BORDER)
+
+        # Header separator
+        row_sep("├", "┼", "┼", "┤")
+
+        # Problem rows
         filtered = self._filtered()
         if not filtered:
-            result.append("  no problems match the current filters\n", style=DIM)
+            result.append(P + "│", style=BORDER)
+            msg = " no problems match filters"
+            result.append((" " + msg).ljust(TW + CW + DW + 6), style=DIM)
+            result.append("│\n", style=BORDER)
         else:
-            # Clamp selected index
             sel = max(0, min(self._selected, len(filtered) - 1))
             visible_rows = self.VISIBLE_ROWS
             scroll = self._scroll_offset
-
-            # Ensure selected is visible
             if sel < scroll:
                 scroll = sel
             if sel >= scroll + visible_rows:
@@ -152,53 +181,55 @@ class HomeWidget(Widget):
 
             for idx_rel, problem in enumerate(visible):
                 idx_abs = idx_rel + scroll
-                is_selected = (idx_abs == sel)
-                available = problem.get("available", False)
+                is_sel  = (idx_abs == sel)
+                avail   = problem.get("available", False)
+                bg      = SEL_BG if is_sel else ""
 
-                diff = problem["difficulty"]
+                diff       = problem["difficulty"]
                 diff_color = DIFF_COLORS.get(diff, TEXT)
-                topic_str = f"{problem['topic']:<8}"
-                diff_str = f"{diff:<8}"
-                title_str = f"{problem['title']:<36}"
 
-                if is_selected:
-                    # Selected row
-                    result.append("  ", style=f"on {SEL_BG}")
-                    result.append("▶  ", style=f"bold {BLUE} on {SEL_BG}")
-                    if available:
-                        result.append(title_str, style=f"bold {TEXT} on {SEL_BG}")
-                    else:
-                        result.append(title_str + "· · · ", style=f"{DIM} on {SEL_BG}")
-                    result.append(f"  {topic_str}", style=f"{TEAL} on {SEL_BG}")
-                    result.append(f"  {diff_str}", style=f"{diff_color} on {SEL_BG}")
-                    result.append("\n")
+                # title cell
+                if is_sel:
+                    prefix = "▶ "
+                    t_style = f"bold {TEXT}"
                 else:
-                    result.append("     ")
-                    if available:
-                        result.append(title_str, style=TEXT)
-                    else:
-                        result.append(title_str + "· · · ", style=DIM)
-                    result.append(f"  {topic_str}", style=TEAL)
-                    result.append(f"  {diff_str}", style=diff_color)
-                    result.append("\n")
+                    prefix = "  "
+                    t_style = TEXT if avail else DIM
 
+                title_raw = prefix + problem["title"]
+                if not avail:
+                    title_raw += "  · · ·"
+
+                result.append(P + "│", style=BORDER)
+                val = title_raw[:TW].ljust(TW)
+                s = f"{t_style} on {bg}" if bg else t_style
+                result.append(" " + val + " ", style=s)
+
+                result.append("│", style=BORDER)
+                topic_s = f"{TEAL} on {bg}" if bg else TEAL
+                cell(problem["topic"], CW, topic_s)
+
+                result.append("│", style=BORDER)
+                diff_s = f"{diff_color} on {bg}" if bg else diff_color
+                cell(diff, DW, diff_s)
+
+                result.append("│\n", style=BORDER)
+
+                # row separator between rows (not after last)
+                if idx_rel < len(visible) - 1:
+                    row_sep("├", "┼", "┼", "┤")
+
+        # Bottom border
+        row_sep("└", "┴", "┴", "┘")
         result.append("\n")
 
-        # --- Divider ---
-        result.append("  " + "─" * (width - 4) + "\n", style=BORDER)
-
-        # --- Key hints ---
-        hints = [
-            ("[↑↓]", "navigate"),
-            ("[t]",   "topic"),
-            ("[d]",   "difficulty"),
-            ("[enter]", "launch"),
-            ("[q]",   "quit"),
-        ]
-        result.append("  ")
+        # ── Key hints ───────────────────────────────────────────────────
+        hints = [("[↑↓]","navigate"), ("[t]","topic"), ("[d]","difficulty"),
+                 ("[enter]","launch"), ("[q]","quit")]
+        result.append(P)
         for key, label in hints:
             result.append(key, style=f"bold {BLUE}")
-            result.append(f" {label}  ", style=DIM)
+            result.append(f" {label}   ", style=DIM)
         result.append("\n")
 
         return result
