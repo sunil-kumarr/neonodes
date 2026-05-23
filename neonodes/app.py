@@ -24,6 +24,7 @@ from textual.screen import Screen
 from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import (
+    Footer,
     Input,
     Label,
 )
@@ -126,6 +127,7 @@ class VariablesPanel(Widget):
         padding: 1 2;
         height: 12;
         overflow-y: auto;
+        border: solid {BORDER};
     }}
     """
 
@@ -254,15 +256,21 @@ class VisualizerScreen(Screen):
     """Full-screen visualizer for a single algorithm problem."""
 
     BINDINGS: ClassVar[list[Binding]] = [
-        Binding("left",   "prev_frame",   "Prev",       show=True),
-        Binding("h",      "prev_frame",   "Prev",       show=False),
-        Binding("right",  "next_frame",   "Next",       show=True),
-        Binding("l",      "next_frame",   "Next",       show=False),
+        # Normal mode
+        Binding("left",   "prev_frame",   "◀ Prev",     show=True),
+        Binding("right",  "next_frame",   "Next ▶",     show=True),
         Binding("space",  "toggle_play",  "Play/Pause", show=True),
         Binding("i",      "focus_input",  "Edit Input", show=True),
-        Binding("escape", "go_home",      "Home",       show=True),
         Binding("q",      "quit",         "Quit",       show=True),
+        Binding("h",      "prev_frame",   "Prev",       show=False),
+        Binding("l",      "next_frame",   "Next",       show=False),
+        # escape routes to go_home or cancel_input depending on mode
+        Binding("escape", "escape_action", "Home/Cancel", show=True),
+        # Input mode only
+        Binding("enter",  "submit_input", "Submit",     show=True),
     ]
+
+    _input_focused: bool = False
 
     CSS = f"""
     Screen {{ background: {BG}; }}
@@ -294,17 +302,19 @@ class VisualizerScreen(Screen):
     }}
 
     #step-explanation {{
-        height: 2;
-        background: #1A1C2E;
+        height: 3;
+        width: 100%;
+        background: {BG};
         padding: 0 2;
         color: {BLUE};
         content-align: left middle;
         border: solid {BORDER};
+        border-title-color: {DIM};
     }}
 
-    #bottom-bar {{
+    #input-bar {{
         height: 5;
-        background: #1A1C2E;
+        background: {BG};
         border: solid {BORDER};
         layout: vertical;
         padding: 0 1;
@@ -339,11 +349,30 @@ class VisualizerScreen(Screen):
         padding: 0 1;
     }}
 
+    #bottom-bar {{
+        height: 3;
+        background: {BG};
+        border: solid {BORDER};
+        layout: vertical;
+        padding: 0 1;
+    }}
+
     Label#problem-title {{
         color: {YELLOW};
         text-style: bold;
         padding: 0 2;
+        width: 100%;
         border-bottom: solid {BORDER};
+    }}
+
+    Footer {{
+        background: {SURFACE};
+        color: {DIM};
+    }}
+
+    Footer > .footer--key {{
+        background: {SEL_BG};
+        color: {BLUE};
     }}
     """
 
@@ -382,10 +411,10 @@ class VisualizerScreen(Screen):
                         id="grid-widget",
                     )
                 yield VariablesPanel(id="vars-panel")
-                yield Label("", id="step-explanation")
 
-        with Container(id="bottom-bar"):
-            yield ScrubberBar(id="scrubber")
+        yield Label("", id="step-explanation")
+
+        with Container(id="input-bar"):
             with Horizontal(id="input-row"):
                 yield Label("grid ▶", id="input-label")
                 yield Input(
@@ -394,6 +423,11 @@ class VisualizerScreen(Screen):
                     id="grid-input",
                 )
             yield Label("", id="parse-error")
+
+        with Container(id="bottom-bar"):
+            yield ScrubberBar(id="scrubber")
+
+        yield Footer()
 
     def on_mount(self) -> None:
         self._lineno_map = self._build_lineno_map()
@@ -404,6 +438,8 @@ class VisualizerScreen(Screen):
         self.query_one("#left-panel").border_title = "code"
         self.query_one("#grid-container").border_title = "visualization"
         self.query_one("#vars-panel").border_title = "variables"
+        self.query_one("#step-explanation").border_title = "step explanation"
+        self.query_one("#input-bar").border_title = "input"
         self.query_one("#bottom-bar").border_title = "playback"
 
     # ------------------------------------------------------------------
@@ -554,11 +590,41 @@ class VisualizerScreen(Screen):
     def action_focus_input(self) -> None:
         self.query_one("#grid-input", Input).focus()
 
-    def action_blur_input(self) -> None:
-        self.query_one("#grid-input", Input).blur()
+    def on_input_focus(self, event: Input.Focus) -> None:
+        if event.input.id != "grid-input":
+            return
+        self._input_focused = True
+        self.refresh_bindings()
 
-    def action_go_home(self) -> None:
-        self.app.pop_screen()
+    def on_input_blur(self, event: Input.Blur) -> None:
+        if event.input.id != "grid-input":
+            return
+        self._input_focused = False
+        self.refresh_bindings()
+
+    def check_action(self, action: str, parameters: tuple) -> bool | None:
+        normal_only = {"prev_frame", "next_frame", "toggle_play", "focus_input", "quit"}
+        input_only  = {"submit_input"}
+        if self._input_focused:
+            if action in normal_only:
+                return False
+        else:
+            if action in input_only:
+                return False
+        return True
+
+    def action_escape_action(self) -> None:
+        if self._input_focused:
+            inp = self.query_one("#grid-input", Input)
+            inp.value = self._grid_to_str(self._grid)
+            inp.blur()
+        else:
+            self.app.pop_screen()
+
+    def action_submit_input(self) -> None:
+        inp = self.query_one("#grid-input", Input)
+        self._parse_and_reload(inp.value)
+        inp.blur()
 
     def action_quit(self) -> None:
         self.app.exit()
