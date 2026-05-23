@@ -1,17 +1,12 @@
-"""
-recorder.py — sys.settrace-based frame recorder for algorithm visualization.
-
-Records execution frames by intercepting special marker function calls
-(_viz_visit, _viz_mark) and line events during algorithm execution.
-"""
+"""sys.settrace-based frame recorder for algorithm visualization."""
 
 from __future__ import annotations
 
 import copy
 import sys
+from typing import Callable
 
-
-_MARKER_FNS = {"_viz_visit", "_viz_mark", "_viz_count"}
+_DEFAULT_MARKER_FNS: frozenset[str] = frozenset({"_viz_visit", "_viz_mark", "_viz_count"})
 
 
 class Recorder:
@@ -20,15 +15,39 @@ class Recorder:
     def __init__(self) -> None:
         self.frames: list[dict] = []
         self._dfs_depth: int = 0
-        self._recording: bool = False
-        self._target_fn_names: set[str] = set()
+        self._marker_fns: frozenset[str] = _DEFAULT_MARKER_FNS
+        self._nested_fns: frozenset[str] = frozenset()
+        self._target_fn_names: frozenset[str] = frozenset()
+        self._marker_handlers: dict[str, Callable] = {}
 
-    def record(self, fn_name: str, func, *args, **kwargs) -> list[dict]:
-        """Run func(*args, **kwargs) under sys.settrace, return collected frames."""
+    def record(
+        self,
+        fn_name: str,
+        func,
+        *args,
+        marker_fns: set[str] | None = None,
+        nested_fns: set[str] | None = None,
+        marker_handlers: dict[str, Callable] | None = None,
+        **kwargs,
+    ) -> list[dict]:
+        """Run func(*args) under sys.settrace and return collected frames.
+
+        Args:
+            fn_name: Name of the top-level function to trace.
+            func: The function to execute.
+            marker_fns: Set of marker function names to intercept.
+                        Defaults to {"_viz_visit", "_viz_mark", "_viz_count"}.
+            nested_fns: Set of nested function names to trace for depth tracking.
+                        Defaults to empty (no depth tracking).
+            marker_handlers: Dict mapping marker fn name → callable(frame) → dict | None.
+                             If None, uses built-in count_islands handlers.
+        """
         self.frames = []
         self._dfs_depth = 0
-        self._recording = False
-        self._target_fn_names = {fn_name, "dfs"}
+        self._marker_fns = frozenset(marker_fns) if marker_fns is not None else _DEFAULT_MARKER_FNS
+        self._nested_fns = frozenset(nested_fns) if nested_fns is not None else frozenset()
+        self._target_fn_names = frozenset({fn_name}) | self._nested_fns
+        self._marker_handlers = marker_handlers or self._default_handlers()
 
         old_trace = sys.gettrace()
         sys.settrace(self._global_trace)
@@ -40,6 +59,36 @@ class Recorder:
         return self.frames
 
     # ------------------------------------------------------------------
+    # Default handlers (count_islands compatible)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _default_handlers() -> dict[str, Callable]:
+        def handle_viz_visit(locs: dict, depth: int) -> dict | None:
+            r, c = locs.get("r"), locs.get("c")
+            if r is not None and c is not None:
+                return {"type": "cell_visit", "r": r, "c": c, "color": "current", "dfs_depth": depth}
+            return None
+
+        def handle_viz_mark(locs: dict, depth: int) -> dict | None:
+            r, c = locs.get("r"), locs.get("c")
+            if r is not None and c is not None:
+                return {"type": "cell_mark", "r": r, "c": c, "color": "visited", "dfs_depth": depth}
+            return None
+
+        def handle_viz_count(locs: dict, depth: int) -> dict | None:
+            count = locs.get("count")
+            if count is not None:
+                return {"type": "count_update", "count": count, "dfs_depth": depth}
+            return None
+
+        return {
+            "_viz_visit": handle_viz_visit,
+            "_viz_mark":  handle_viz_mark,
+            "_viz_count": handle_viz_count,
+        }
+
+    # ------------------------------------------------------------------
     # Trace callbacks
     # ------------------------------------------------------------------
 
@@ -47,12 +96,18 @@ class Recorder:
         fn_name = frame.f_code.co_name
 
         if event == "call":
-            if fn_name in _MARKER_FNS:
-                # Global trace receives "call" with args already in f_locals
-                self._handle_marker(fn_name, frame)
-                return None  # no local trace needed for marker stubs
-            if fn_name == "dfs":
+            if fn_name in self._marker_fns:
+                handler = self._marker_handlers.get(fn_name)
+                if handler:
+                    locs = dict(frame.f_locals)
+                    result = handler(locs, self._dfs_depth)
+                    if result:
+                        self.frames.append(result)
+                return None
+
+            if fn_name in self._nested_fns:
                 self._dfs_depth += 1
+
             if fn_name in self._target_fn_names:
                 return self._local_trace
 
@@ -65,7 +120,7 @@ class Recorder:
             return self._local_trace
 
         if event == "return":
-            if fn_name == "dfs":
+            if fn_name in self._nested_fns:
                 self._dfs_depth = max(0, self._dfs_depth - 1)
                 self.frames.append({
                     "type": "dfs_return",
@@ -75,8 +130,6 @@ class Recorder:
             return self._local_trace
 
         if event == "line":
-            if fn_name in _MARKER_FNS:
-                return self._local_trace
             if fn_name in self._target_fn_names:
                 self._emit_line_frame(frame)
             return self._local_trace
@@ -99,40 +152,6 @@ class Recorder:
             "locals": locals_snap,
             "dfs_depth": self._dfs_depth,
         })
-
-    def _handle_marker(self, fn_name: str, frame) -> None:
-        """Intercept _viz_* marker calls and emit structured events."""
-        locs = dict(frame.f_locals)
-        if fn_name == "_viz_visit":
-            r = locs.get("r")
-            c = locs.get("c")
-            if r is not None and c is not None:
-                self.frames.append({
-                    "type": "cell_visit",
-                    "r": r,
-                    "c": c,
-                    "color": "current",
-                    "dfs_depth": self._dfs_depth,
-                })
-        elif fn_name == "_viz_mark":
-            r = locs.get("r")
-            c = locs.get("c")
-            if r is not None and c is not None:
-                self.frames.append({
-                    "type": "cell_mark",
-                    "r": r,
-                    "c": c,
-                    "color": "visited",
-                    "dfs_depth": self._dfs_depth,
-                })
-        elif fn_name == "_viz_count":
-            count = locs.get("count")
-            if count is not None:
-                self.frames.append({
-                    "type": "count_update",
-                    "count": count,
-                    "dfs_depth": self._dfs_depth,
-                })
 
     @staticmethod
     def _safe_deepcopy(obj: dict) -> dict:

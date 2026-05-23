@@ -12,28 +12,9 @@ from textual.widget import Widget
 from rich.text import Text
 
 from neonodes.problems.registry import TOPICS, DIFFICULTIES, PROBLEMS
-
-# ---------------------------------------------------------------------------
-# Color palette
-# ---------------------------------------------------------------------------
-
-BG      = "#252836"
-SURFACE = "#1E2230"
-BORDER  = "#3D4566"
-TEXT    = "#C0CAE4"
-DIM     = "#565F89"
-BLUE    = "#7AA2F7"
-GREEN   = "#9ECE6A"
-YELLOW  = "#E0AF68"
-RED     = "#F7768E"
-TEAL    = "#73DACA"
-SEL_BG  = "#2D3250"
-
-DIFF_COLORS = {
-    "easy":   GREEN,
-    "medium": YELLOW,
-    "hard":   RED,
-}
+from neonodes.theme import (
+    BG, SURFACE, BORDER, TEXT, DIM, BLUE, GREEN, YELLOW, RED, TEAL, SEL_BG, DIFF_COLORS
+)
 
 
 # ---------------------------------------------------------------------------

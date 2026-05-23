@@ -1,20 +1,9 @@
-"""
-app.py — Textual App for neonodes algorithm visualizer.
-
-Layout:
-  ┌─────────────┬──────────────────┐
-  │  Code Pane  │   Grid Widget    │
-  │  (left)     ├──────────────────┤
-  │             │  Variables Panel │
-  ├─────────────┴──────────────────┤
-  │  Scrubber + Input Bar          │
-  └────────────────────────────────┘
-"""
+"""app.py — VisualizerScreen + NeonodesApp."""
 
 from __future__ import annotations
 
-import ast
 import copy
+import importlib
 from typing import ClassVar
 
 from textual.app import App, ComposeResult
@@ -22,267 +11,31 @@ from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import Screen
 from textual.timer import Timer
-from textual.widget import Widget
-from textual.widgets import (
-    Footer,
-    Input,
-    Label,
-)
-from rich.text import Text
+from textual.widgets import Footer, Input, Label
 
+from neonodes.theme import BG, SURFACE, BORDER, TEXT, DIM, BLUE, YELLOW, RED, SEL_BG
+from neonodes.widgets import CodePane, ScrubberBar, VariablesPanel, LegendWidget
 from neonodes.renderers.grid import GridWidget
 
-# ---------------------------------------------------------------------------
-# Color palette
-# ---------------------------------------------------------------------------
 
-BG      = "#252836"
-SURFACE = "#1E2230"
-BORDER  = "#3D4566"
-TEXT    = "#C0CAE4"
-DIM     = "#565F89"
-BLUE    = "#7AA2F7"
-GREEN   = "#9ECE6A"
-YELLOW  = "#E0AF68"
-RED     = "#F7768E"
-TEAL    = "#73DACA"
-SEL_BG  = "#2D3250"
+def _load_renderer(renderer_name: str):
+    """Instantiate a renderer by dotted class path from RENDERER_MAP."""
+    from neonodes.problems.registry import RENDERER_MAP
+    dotted = RENDERER_MAP.get(renderer_name)
+    if not dotted:
+        raise ValueError(f"Unknown renderer: {renderer_name!r}")
+    module_path, cls_name = dotted.rsplit(".", 1)
+    mod = importlib.import_module(module_path)
+    return getattr(mod, cls_name)()
 
 
-# ---------------------------------------------------------------------------
-# Code Pane
-# ---------------------------------------------------------------------------
-
-
-class CodePane(Widget):
-    """Read-only code display with highlighted current line."""
-
-    DEFAULT_CSS = f"""
-    CodePane {{
-        background: {SURFACE};
-        padding: 1 2;
-        width: 100%;
-        height: 1fr;
-        overflow-y: auto;
-    }}
-    """
-
-    def __init__(self, code_lines: list[str], **kwargs) -> None:
-        super().__init__(**kwargs)
-        self._code_lines = code_lines
-        self._highlighted_lineno: int | None = None
-
-    def highlight_line(self, lineno: int | None) -> None:
-        """Highlight the 1-based lineno (matching frame lineno)."""
-        self._highlighted_lineno = lineno
-        self.refresh()
-
-    def render(self) -> Text:
-        result = Text()
-        max_len = max(1, (self.size.width or 80) - 8)
-
-        for display_idx, line in enumerate(self._code_lines, start=1):
-            is_current = (
-                self._highlighted_lineno is not None
-                and display_idx == self._highlighted_lineno
-            )
-
-            # Truncate long lines to prevent wrapping
-            truncated = line[:max_len]
-            line_no_text = f"{display_idx:3} "
-
-            if is_current:
-                result.append(line_no_text, style=f"bold {BLUE}")
-                result.append("▶ ", style=f"bold {RED}")
-                result.append(truncated + "\n", style=f"bold {TEXT} on {SEL_BG}")
-            else:
-                result.append(line_no_text, style=DIM)
-                result.append("  ")
-                stripped = line.strip()
-                if stripped.startswith("#") or stripped == "":
-                    result.append(truncated + "\n", style=DIM)
-                elif stripped.startswith("def "):
-                    result.append(truncated + "\n", style="#C792EA")
-                elif stripped.startswith("return"):
-                    result.append(truncated + "\n", style=RED)
-                elif stripped.startswith("if ") or stripped.startswith("for "):
-                    result.append(truncated + "\n", style="#89B4FA")
-                else:
-                    result.append(truncated + "\n", style=TEXT)
-
-        return result
-
-
-# ---------------------------------------------------------------------------
-# Legend Widget
-# ---------------------------------------------------------------------------
-
-
-class LegendWidget(Widget):
-    """Color legend for grid cell states."""
-
-    DEFAULT_CSS = f"""
-    LegendWidget {{
-        background: {SURFACE};
-        padding: 1 2;
-        height: 100%;
-        width: 1fr;
-        border: solid {BORDER};
-    }}
-    """
-
-    def render(self) -> Text:
-        result = Text()
-        result.append("  legend\n", style=f"bold {TEAL}")
-        result.append("  " + "─" * 20 + "\n", style=BORDER)
-
-        entries = [
-            ("#F7768E", "■", "currently visiting"),
-            ("#9ECE6A", "■", "visited / in island"),
-            ("#73DACA", "■", "land (unvisited)"),
-            ("#3D4566", "■", "water"),
-            (YELLOW,    "→", "direction of travel"),
-        ]
-        for color, icon, label in entries:
-            result.append(f"  {icon} ", style=f"bold {color}")
-            result.append(f"{label}\n", style=TEXT)
-
-        return result
-
-
-# ---------------------------------------------------------------------------
-# Variables Panel
-# ---------------------------------------------------------------------------
-
-
-class VariablesPanel(Widget):
-    """Shows current variable state: count, r, c, dfs_depth."""
-
-    DEFAULT_CSS = f"""
-    VariablesPanel {{
-        background: {SURFACE};
-        padding: 1 2;
-        height: 100%;
-        width: 1fr;
-        overflow-y: auto;
-        border: solid {BORDER};
-    }}
-    """
-
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self._vars: dict = {}
-        self._dfs_depth: int = 0
-        self._frame_type: str = ""
-
-    def update_vars(self, frame: dict) -> None:
-        self._vars = frame.get("locals", {})
-        self._dfs_depth = frame.get("dfs_depth", 0)
-        self._frame_type = frame.get("type", "")
-        self.refresh()
-
-    def render(self) -> Text:
-        result = Text()
-        result.append("  variables\n", style=f"bold {TEAL}")
-        result.append("  " + "─" * 26 + "\n", style=BORDER)
-
-        def var_line(name: str, val, style: str = TEXT) -> None:
-            padded = f"  {name:<14}"
-            result.append(padded, style=BLUE)
-            result.append(f" = {val}\n", style=style)
-
-        locs = self._vars
-
-        count = locs.get("count", "—")
-        var_line("count", count, style=f"bold {YELLOW}")
-
-        r_val = locs.get("r", "—")
-        c_val = locs.get("c", "—")
-        var_line("r", r_val)
-        var_line("c", c_val)
-
-        rows_val = locs.get("rows", "—")
-        cols_val = locs.get("cols", "—")
-        var_line("rows", rows_val, style=DIM)
-        var_line("cols", cols_val, style=DIM)
-
-        depth_bar = "█" * self._dfs_depth if self._dfs_depth else "·"
-        var_line("dfs_depth", f"{self._dfs_depth}  {depth_bar}", style=RED)
-
-        result.append("\n")
-        type_colors = {
-            "cell_visit":   RED,
-            "cell_mark":    TEAL,
-            "count_update": YELLOW,
-            "dfs_return":   "#C792EA",
-            "line":         DIM,
-        }
-        ft = self._frame_type
-        color = type_colors.get(ft, BORDER)
-        result.append("  frame type: ", style=DIM)
-        result.append(f"{ft}\n", style=f"bold {color}")
-
-        return result
-
-
-# ---------------------------------------------------------------------------
-# Scrubber / bottom bar
-# ---------------------------------------------------------------------------
-
-
-class ScrubberBar(Widget):
-    """Step counter + play controls."""
-
-    DEFAULT_CSS = f"""
-    ScrubberBar {{
-        background: {SURFACE};
-        height: 3;
-        padding: 0 2;
-        layout: horizontal;
-        align: center middle;
-    }}
-    """
-
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self._step = 0
-        self._total = 0
-        self._playing = False
-        self._speed = 1
-
-    def update(self, step: int, total: int, playing: bool, speed: int = 1) -> None:
-        self._step = step
-        self._total = total
-        self._playing = playing
-        self._speed = speed
-        self.refresh()
-
-    def render(self) -> Text:
-        result = Text()
-
-        result.append("  [◀] ", style=f"bold {BLUE}")
-        if self._playing:
-            result.append("[⏸] ", style=f"bold {RED}")
-        else:
-            result.append("[▶] ", style=f"bold {BLUE}")
-        result.append("[▶] ", style=f"bold {BLUE}")
-
-        step_display = self._step + 1 if self._total > 0 else 0
-        result.append(f"  step {step_display}/{self._total}  ", style=TEAL)
-
-        result.append(f"{self._speed}x speed  ", style=DIM)
-
-        if self._total > 0:
-            bar_width = 20
-            filled = int(bar_width * self._step / max(self._total - 1, 1))
-            bar_filled = "█" * filled
-            bar_empty = "░" * (bar_width - filled)
-            result.append("[", style=BORDER)
-            result.append(bar_filled, style=BLUE)
-            result.append(bar_empty, style=SEL_BG)
-            result.append("]", style=BORDER)
-
-        return result
+def _load_problem(problem_id: str):
+    """Import a problem module by id from PROBLEM_MAP."""
+    from neonodes.problems.registry import PROBLEM_MAP
+    dotted = PROBLEM_MAP.get(problem_id)
+    if not dotted:
+        raise ValueError(f"Unknown problem: {problem_id!r}")
+    return importlib.import_module(dotted)
 
 
 # ---------------------------------------------------------------------------
@@ -291,24 +44,19 @@ class ScrubberBar(Widget):
 
 
 class VisualizerScreen(Screen):
-    """Full-screen visualizer for a single algorithm problem."""
+    """Full-screen visualizer — renderer-agnostic."""
 
     BINDINGS: ClassVar[list[Binding]] = [
-        # Normal mode
-        Binding("left",   "prev_frame",   "◀ Prev",     show=True),
-        Binding("right",  "next_frame",   "Next ▶",     show=True),
-        Binding("space",  "toggle_play",  "Play/Pause", show=True),
-        Binding("i",      "focus_input",  "Edit Input", show=True),
-        Binding("q",      "quit",         "Quit",       show=True),
-        Binding("h",      "prev_frame",   "Prev",       show=False),
-        Binding("l",      "next_frame",   "Next",       show=False),
-        # escape routes to go_home or cancel_input depending on mode
+        Binding("left",   "prev_frame",    "◀ Prev",      show=True),
+        Binding("right",  "next_frame",    "Next ▶",      show=True),
+        Binding("space",  "toggle_play",   "Play/Pause",  show=True),
+        Binding("i",      "focus_input",   "Edit Input",  show=True),
+        Binding("q",      "quit",          "Quit",        show=True),
         Binding("escape", "escape_action", "Home/Cancel", show=True),
-        # Input mode only
-        Binding("enter",  "submit_input", "Submit",     show=True),
+        Binding("h",      "prev_frame",    "Prev",        show=False),
+        Binding("l",      "next_frame",    "Next",        show=False),
+        Binding("enter",  "submit_input",  "Submit",      show=True),
     ]
-
-    _input_focused: bool = False
 
     CSS = f"""
     Screen {{ background: {BG}; }}
@@ -427,24 +175,32 @@ class VisualizerScreen(Screen):
     def __init__(self, problem_module, **kwargs) -> None:
         super().__init__(**kwargs)
         self._problem = problem_module
-        self._grid = copy.deepcopy(problem_module.DEFAULT_GRID)
+        self._renderer = _load_renderer(getattr(problem_module, "RENDERER", "grid"))
+
+        input_data = copy.deepcopy(
+            getattr(problem_module, "DEFAULT_INPUT",
+                    getattr(problem_module, "DEFAULT_GRID", None))
+        )
+        self._input_data = input_data
         self._frames: list[dict] = []
         self._step: int = 0
         self._playing: bool = False
         self._play_timer: Timer | None = None
-        self._cell_states: dict[tuple[int, int], str] = {}
+        self._frame_states: dict = {}
         self._play_speed: int = 1
         self._lineno_map: dict[int, int] = {}
+        self._input_focused: bool = False
 
-        self._prev_cell: tuple[int, int] | None = None
-        self._current_cell: tuple[int, int] | None = None
-        self._frames = self._filter_frames(problem_module.run(self._grid))
+        raw_frames = problem_module.run(input_data)
+        self._frames = self._renderer.filter_frames(raw_frames)
 
     # ------------------------------------------------------------------
     # Layout
     # ------------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
+        viz_widget = self._renderer.make_widget(self._input_data)
+
         with Container(id="main-container"):
             with Vertical(id="left-panel"):
                 yield Label(
@@ -455,23 +211,22 @@ class VisualizerScreen(Screen):
 
             with Vertical(id="right-panel"):
                 with Container(id="grid-container"):
-                    yield GridWidget(
-                        grid=self._grid,
-                        cell_states={},
-                        id="grid-widget",
-                    )
+                    yield viz_widget
                 with Horizontal(id="info-row"):
                     yield VariablesPanel(id="vars-panel")
-                    yield LegendWidget(id="legend")
+                    yield LegendWidget(
+                        entries=self._renderer.legend_entries(),
+                        id="legend",
+                    )
 
         yield Label("", id="step-explanation")
 
         with Container(id="input-bar"):
             with Horizontal(id="input-row"):
-                yield Label("grid ▶", id="input-label")
+                yield Label("input ▶", id="input-label")
                 yield Input(
-                    value=self._grid_to_str(self._grid),
-                    placeholder="[[1,0,1],[0,1,0]]",
+                    value=self._renderer.serialize_input(self._input_data),
+                    placeholder="edit input...",
                     id="grid-input",
                 )
             yield Label("", id="parse-error")
@@ -486,7 +241,6 @@ class VisualizerScreen(Screen):
         self._apply_frame(0)
         self.query_one("#grid-input", Input).blur()
 
-        # Set border titles on containers
         self.query_one("#left-panel").border_title = "code"
         self.query_one("#grid-container").border_title = "visualization"
         self.query_one("#vars-panel").border_title = "variables"
@@ -500,7 +254,6 @@ class VisualizerScreen(Screen):
     # ------------------------------------------------------------------
 
     def _apply_frame(self, step: int) -> None:
-        """Apply frame at `step` index to all widgets."""
         if not self._frames:
             return
 
@@ -508,96 +261,50 @@ class VisualizerScreen(Screen):
         self._step = step
         frame = self._frames[step]
 
-        self._cell_states = self._compute_cell_states(step)
+        # Let renderer compute visual state
+        self._frame_states = self._renderer.compute_states(self._frames, step)
 
-        # Track prev → current cell for arrow rendering
-        if frame.get("type") == "cell_visit":
-            self._prev_cell = self._current_cell
-            self._current_cell = (frame["r"], frame["c"])
+        # Update visualization widget
+        viz = self.query_one("#grid-container").children[0]
+        self._renderer.update_widget(viz, self._input_data, self._frame_states)
 
-        grid_w = self.query_one("#grid-widget", GridWidget)
-        grid_w.update_grid(self._grid, self._cell_states,
-                           prev_cell=self._prev_cell,
-                           current_cell=self._current_cell)
-
+        # Update code pane
         code_pane = self.query_one("#code-pane", CodePane)
         if frame.get("type") == "line":
-            display_lineno = self._abs_lineno_to_display(frame["lineno"])
-            code_pane.highlight_line(display_lineno)
+            code_pane.highlight_line(self._abs_lineno_to_display(frame["lineno"]))
         else:
             code_pane.highlight_line(None)
 
+        # Update variables
         vars_panel = self.query_one("#vars-panel", VariablesPanel)
-        vars_panel.update_vars(frame)
+        vars_panel.update_entries(self._renderer.variable_entries(frame))
 
-        explanation = self.query_one("#step-explanation", Label)
-        explanation.update(self._explain_frame(frame, step))
+        # Update step explanation
+        self.query_one("#step-explanation", Label).update(
+            self._renderer.explain_frame(frame, step, len(self._frames))
+        )
 
-        scrubber = self.query_one("#scrubber", ScrubberBar)
-        scrubber.update(step, len(self._frames), self._playing, self._play_speed)
-
-    def _compute_cell_states(self, up_to: int) -> dict[tuple[int, int], str]:
-        """Replay all frames up to `up_to`, building cell state dict."""
-        states: dict[tuple[int, int], str] = {}
-        for i, frame in enumerate(self._frames[: up_to + 1]):
-            ft = frame.get("type")
-            if ft == "cell_visit":
-                r, c = frame["r"], frame["c"]
-                for k in list(states.keys()):
-                    if states[k] == "current":
-                        states[k] = "visited"
-                states[(r, c)] = "current"
-            elif ft == "cell_mark":
-                r, c = frame["r"], frame["c"]
-                states[(r, c)] = "visited"
-        return states
-
-    def _explain_frame(self, frame: dict, step: int) -> str:
-        ft = frame.get("type")
-        locs = frame.get("locals", {})
-        depth = frame.get("dfs_depth", 0)
-        prefix = f"  [{step + 1}/{len(self._frames)}]  "
-
-        if ft == "cell_visit":
-            r, c = frame["r"], frame["c"]
-            return f"{prefix}Visiting cell ({r},{c}) — checking if it's land and unvisited"
-        if ft == "cell_mark":
-            r, c = frame["r"], frame["c"]
-            return f"{prefix}Marking ({r},{c}) as visited — won't revisit this cell"
-        if ft == "count_update":
-            return f"{prefix}Island fully explored — count is now {frame['count']}"
-        if ft == "dfs_return":
-            if depth == 0:
-                return f"{prefix}DFS complete — returning from island traversal"
-            return f"{prefix}Dead end — cell out of bounds, already visited, or water"
-        if ft == "line":
-            fn = frame.get("fn", "")
-            lineno = frame.get("lineno", 0)
-            display = self._abs_lineno_to_display(lineno)
-            count = locs.get("count", "—")
-            r_val = locs.get("r", "—")
-            c_val = locs.get("c", "—")
-            if display is not None and display <= 4:
-                return f"{prefix}Initializing — setting up grid dimensions and count = 0"
-            if fn == "dfs" and r_val != "—":
-                return f"{prefix}DFS at ({r_val},{c_val}) depth={depth} — exploring neighbors"
-            if r_val != "—" and c_val != "—":
-                return f"{prefix}Scanning grid at ({r_val},{c_val}) — count={count}"
-            return f"{prefix}Executing line {display or lineno}"
-        return f"{prefix}—"
+        # Update scrubber
+        self.query_one("#scrubber", ScrubberBar).update(
+            step, len(self._frames), self._playing, self._play_speed
+        )
 
     def _build_lineno_map(self) -> dict[int, int]:
-        """
-        Build a mapping from absolute source line numbers of
-        _count_islands_instrumented to 1-based CODE_LINES display indices.
-        """
+        """Map absolute source line numbers to 1-based CODE_LINES display indices."""
         import inspect
-        import neonodes.problems.count_islands as mod
         mapping: dict[int, int] = {}
+
+        # Find the instrumented function in the problem module
+        instrumented = None
+        for name in dir(self._problem):
+            if name.startswith("_") and "instrumented" in name:
+                instrumented = getattr(self._problem, name)
+                break
+        if instrumented is None:
+            return mapping
+
         try:
-            source_lines, start_line = inspect.getsourcelines(
-                mod._count_islands_instrumented
-            )
+            source_lines, start_line = inspect.getsourcelines(instrumented)
         except Exception:
             return mapping
 
@@ -605,26 +312,19 @@ class VisualizerScreen(Screen):
         for src_offset, src_line in enumerate(source_lines):
             abs_lineno = start_line + src_offset
             stripped_src = src_line.strip()
-
-            if not stripped_src:
+            if not stripped_src or stripped_src.startswith('"""'):
                 continue
-            if stripped_src.startswith('"""'):
-                continue
-
             while code_display_idx < len(self._problem.CODE_LINES):
-                cl = self._problem.CODE_LINES[code_display_idx].strip()
-                if cl:
+                if self._problem.CODE_LINES[code_display_idx].strip():
                     break
                 code_display_idx += 1
-
             if code_display_idx < len(self._problem.CODE_LINES):
-                mapping[abs_lineno] = code_display_idx + 1  # 1-based
+                mapping[abs_lineno] = code_display_idx + 1
                 code_display_idx += 1
 
         return mapping
 
     def _abs_lineno_to_display(self, lineno: int) -> int | None:
-        """Map an absolute source lineno to a 1-based CODE_LINES display index."""
         return self._lineno_map.get(lineno)
 
     # ------------------------------------------------------------------
@@ -650,6 +350,26 @@ class VisualizerScreen(Screen):
     def action_focus_input(self) -> None:
         self.query_one("#grid-input", Input).focus()
 
+    def action_escape_action(self) -> None:
+        if self._input_focused:
+            inp = self.query_one("#grid-input", Input)
+            inp.value = self._renderer.serialize_input(self._input_data)
+            inp.blur()
+        else:
+            self.app.pop_screen()
+
+    def action_submit_input(self) -> None:
+        inp = self.query_one("#grid-input", Input)
+        self._parse_and_reload(inp.value)
+        inp.blur()
+
+    def action_quit(self) -> None:
+        self.app.exit()
+
+    # ------------------------------------------------------------------
+    # Input focus/blur → swap footer bindings
+    # ------------------------------------------------------------------
+
     def on_input_focus(self, event: Input.Focus) -> None:
         if event.input.id != "grid-input":
             return
@@ -665,29 +385,11 @@ class VisualizerScreen(Screen):
     def check_action(self, action: str, parameters: tuple) -> bool | None:
         normal_only = {"prev_frame", "next_frame", "toggle_play", "focus_input", "quit"}
         input_only  = {"submit_input"}
-        if self._input_focused:
-            if action in normal_only:
-                return False
-        else:
-            if action in input_only:
-                return False
+        if self._input_focused and action in normal_only:
+            return False
+        if not self._input_focused and action in input_only:
+            return False
         return True
-
-    def action_escape_action(self) -> None:
-        if self._input_focused:
-            inp = self.query_one("#grid-input", Input)
-            inp.value = self._grid_to_str(self._grid)
-            inp.blur()
-        else:
-            self.app.pop_screen()
-
-    def action_submit_input(self) -> None:
-        inp = self.query_one("#grid-input", Input)
-        self._parse_and_reload(inp.value)
-        inp.blur()
-
-    def action_quit(self) -> None:
-        self.app.exit()
 
     # ------------------------------------------------------------------
     # Play timer
@@ -697,18 +399,19 @@ class VisualizerScreen(Screen):
         if self._step >= len(self._frames) - 1:
             self._apply_frame(0)
         self._playing = True
-        interval = 1.0 / self._play_speed
-        self._play_timer = self.set_interval(interval, self._tick_play)
-        scrubber = self.query_one("#scrubber", ScrubberBar)
-        scrubber.update(self._step, len(self._frames), self._playing, self._play_speed)
+        self._play_timer = self.set_interval(1.0 / self._play_speed, self._tick_play)
+        self.query_one("#scrubber", ScrubberBar).update(
+            self._step, len(self._frames), self._playing, self._play_speed
+        )
 
     def _stop_play(self) -> None:
         self._playing = False
         if self._play_timer:
             self._play_timer.stop()
             self._play_timer = None
-        scrubber = self.query_one("#scrubber", ScrubberBar)
-        scrubber.update(self._step, len(self._frames), self._playing, self._play_speed)
+        self.query_one("#scrubber", ScrubberBar).update(
+            self._step, len(self._frames), self._playing, self._play_speed
+        )
 
     def _tick_play(self) -> None:
         if self._step >= len(self._frames) - 1:
@@ -728,82 +431,22 @@ class VisualizerScreen(Screen):
 
     def _parse_and_reload(self, raw: str) -> None:
         error_label = self.query_one("#parse-error", Label)
-        raw = raw.strip()
         try:
-            parsed = ast.literal_eval(raw)
-            if not isinstance(parsed, list) or not parsed:
-                raise ValueError("Must be a non-empty list")
-            if not isinstance(parsed[0], list):
-                raise ValueError("Must be a 2D list")
-            cols = len(parsed[0])
-            for row in parsed:
-                if not isinstance(row, list) or len(row) != cols:
-                    raise ValueError("All rows must have equal length")
-                for cell in row:
-                    if cell not in (0, 1):
-                        raise ValueError("Cells must be 0 or 1")
+            parsed = self._renderer.parse_input(raw)
         except Exception as exc:
             error_label.update(f"  parse error: {exc}")
             return
 
         error_label.update("")
-        self._grid = parsed
-        self._frames = self._filter_frames(self._problem.run(self._grid))
+        self._input_data = parsed
+        raw_frames = self._problem.run(parsed)
+        self._frames = self._renderer.filter_frames(raw_frames)
         self._step = 0
-        self._cell_states = {}
-        self._prev_cell = None
-        self._current_cell = None
+        self._frame_states = {}
         self._stop_play()
 
-        self.query_one("#grid-input", Input).value = self._grid_to_str(parsed)
+        self.query_one("#grid-input", Input).value = self._renderer.serialize_input(parsed)
         self._apply_frame(0)
-
-    # ------------------------------------------------------------------
-    # Utilities
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _filter_frames(frames: list[dict]) -> list[dict]:
-        """Keep only logically meaningful frames, drop noisy line events."""
-        keep_types = {"cell_visit", "cell_mark", "count_update"}
-        # For line frames: keep only the first entry into each (fn, r, c) combo
-        # and the outer scan loop entries (fn=_count_islands_instrumented with r,c defined)
-        result = []
-        seen_scan: set[tuple] = set()
-
-        for f in frames:
-            ft = f["type"]
-            if ft in keep_types:
-                result.append(f)
-                continue
-            if ft == "dfs_return":
-                # Only keep returns at depth 0 (island fully done)
-                if f.get("dfs_depth", 1) == 0:
-                    result.append(f)
-                continue
-            if ft == "line":
-                fn = f.get("fn", "")
-                locs = f.get("locals", {})
-                r, c = locs.get("r"), locs.get("c")
-                # Keep outer scan: first time we see each (r, c) in the main loop
-                if fn == "_count_islands_instrumented" and r is not None and c is not None:
-                    key = ("scan", r, c)
-                    if key not in seen_scan:
-                        seen_scan.add(key)
-                        result.append(f)
-                # Keep dfs entry: first line of dfs for each (r, c) at each depth
-                elif fn == "dfs" and r is not None and c is not None:
-                    depth = f.get("dfs_depth", 0)
-                    key = ("dfs", r, c, depth)
-                    if key not in seen_scan:
-                        seen_scan.add(key)
-                        result.append(f)
-
-        return result
-
-    @staticmethod
-    def _grid_to_str(grid: list[list[int]]) -> str:
-        return "[" + ",".join("[" + ",".join(str(c) for c in row) + "]" for row in grid) + "]"
 
 
 # ---------------------------------------------------------------------------
@@ -812,8 +455,6 @@ class VisualizerScreen(Screen):
 
 
 class NeonodesApp(App):
-    """Main Textual application — starts on the home screen."""
-
     CSS = f"Screen {{ background: {BG}; }}"
 
     def on_mount(self) -> None:
@@ -821,11 +462,8 @@ class NeonodesApp(App):
         self.push_screen(HomeScreen())
 
     def launch_problem(self, problem_id: str) -> None:
-        from neonodes.problems import count_islands
-        from neonodes.problems.registry import PROBLEMS
-
-        problem_map = {"count_islands": count_islands}
-        mod = problem_map.get(problem_id)
-        if mod is None:
-            return  # coming soon — do nothing
+        try:
+            mod = _load_problem(problem_id)
+        except Exception:
+            return
         self.push_screen(VisualizerScreen(problem_module=mod))

@@ -15,9 +15,10 @@ from neonodes.recorder import Recorder
 # Problem metadata
 # ---------------------------------------------------------------------------
 
-TITLE = "Count Islands"
-CATEGORY = "grid"
-DIFFICULTY = "medium"
+TITLE       = "Count Islands"
+CATEGORY    = "grid"
+DIFFICULTY  = "medium"
+RENDERER    = "grid"
 
 DESCRIPTION = (
     "Given a 2D grid of 1s (land) and 0s (water), count the number of islands. "
@@ -25,7 +26,7 @@ DESCRIPTION = (
     "cells horizontally or vertically."
 )
 
-DEFAULT_GRID = [
+DEFAULT_INPUT = DEFAULT_GRID = [
     [1, 1, 0, 0, 0],
     [1, 1, 0, 0, 0],
     [0, 0, 1, 0, 0],
@@ -124,5 +125,6 @@ def run(grid: list[list[int]]) -> list[dict]:
         "_count_islands_instrumented",
         _count_islands_instrumented,
         grid_copy,
+        nested_fns={"dfs"},
     )
     return frames
