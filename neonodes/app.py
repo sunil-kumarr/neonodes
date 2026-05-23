@@ -109,7 +109,7 @@ class VisualizerScreen(Screen):
     }}
 
     #input-bar {{
-        height: 5;
+        height: 6;
         background: {BG};
         border: solid {BORDER};
         layout: vertical;

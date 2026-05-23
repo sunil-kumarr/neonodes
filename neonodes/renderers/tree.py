@@ -519,8 +519,8 @@ class TreeRenderer:
         parsed = ast.literal_eval(raw.strip())
         if isinstance(parsed, tuple) and len(parsed) == 2 and isinstance(parsed[0], list) and isinstance(parsed[1], int):
             arr, target = parsed
-            if len(arr) > 15:
-                raise ValueError("Max 15 nodes")
+            if len(arr) > 31:
+                raise ValueError("Max 31 nodes")
             for v in arr:
                 if v is not None and not isinstance(v, int):
                     raise ValueError("Values must be integers or None")
@@ -528,8 +528,8 @@ class TreeRenderer:
 
         if not isinstance(parsed, list):
             raise ValueError("Must be a list (level-order) or (list, target) tuple")
-        if len(parsed) > 15:
-            raise ValueError("Max 15 nodes")
+        if len(parsed) > 31:
+            raise ValueError("Max 31 nodes")
         for v in parsed:
             if v is not None and not isinstance(v, int):
                 raise ValueError("Values must be integers or None")
