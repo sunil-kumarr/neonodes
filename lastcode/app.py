@@ -11,7 +11,7 @@ from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import Screen
 from textual.timer import Timer
-from textual.widgets import Footer, Input, Label, TabbedContent, TabPane, Static
+from textual.widgets import Footer, Input, Label, Static
 
 from lastcode.theme import BG, SURFACE, BORDER, TEXT, DIM, BLUE, YELLOW, RED, SEL_BG
 from lastcode.widgets import CodePane, ScrubberBar, VariablesPanel, LegendWidget
@@ -76,50 +76,26 @@ class VisualizerScreen(Screen):
         border: solid {BORDER};
     }}
 
-    TabbedContent {{
-        height: 1fr;
-    }}
-
-    ContentSwitcher {{
-        height: 100%;
-    }}
-
-    TabPane {{
-        padding: 0;
-        height: 100%;
+    #problem-panel {{
+        height: 16;
         background: {SURFACE};
+        border: solid {BORDER};
+        layout: vertical;
+    }}
+
+    #solution-panel {{
+        height: 1fr;
+        background: {SURFACE};
+        border: solid {BORDER};
+        layout: vertical;
     }}
 
     #problem-desc {{
         padding: 1 2;
         overflow-y: auto;
-        height: 100%;
+        height: 1fr;
         color: {TEXT};
         background: {SURFACE};
-    }}
-
-    ContentTabs {{
-        display: none;
-    }}
-
-    ContentTab {{
-        color: {DIM};
-        text-style: bold;
-        padding: 0 2;
-    }}
-
-    ContentTab:hover {{
-        color: {TEXT};
-    }}
-
-    ContentTab.-active {{
-        color: {BLUE};
-        text-style: bold;
-    }}
-
-    Underline > .underline--bar {{
-        color: {BLUE};
-        background: {BLUE};
     }}
 
     #right-panel {{
@@ -207,6 +183,7 @@ class VisualizerScreen(Screen):
         text-style: bold;
         padding: 0 2;
         width: 100%;
+        height: 3;
         border-bottom: solid {BORDER};
     }}
 
@@ -252,15 +229,14 @@ class VisualizerScreen(Screen):
 
         with Container(id="main-container"):
             with Vertical(id="left-panel"):
-                yield Label(
-                    f"  {self._problem.TITLE}  [{self._problem.DIFFICULTY.upper()}]",
-                    id="problem-title",
-                )
-                with TabbedContent(id="code-tabs"):
-                    with TabPane("Solution", id="solution-tab"):
-                        yield CodePane(self._problem.CODE_LINES, id="code-pane")
-                    with TabPane("Problem", id="problem-tab"):
-                        yield Static(self._problem.DESCRIPTION, id="problem-desc")
+                with Container(id="problem-panel"):
+                    yield Label(
+                        f"  {self._problem.TITLE}  [{self._problem.DIFFICULTY.upper()}]",
+                        id="problem-title",
+                    )
+                    yield Static(self._problem.DESCRIPTION, id="problem-desc")
+                with Container(id="solution-panel"):
+                    yield CodePane(self._problem.CODE_LINES, id="code-pane")
 
             with Vertical(id="right-panel"):
                 with Container(id="grid-container"):
@@ -292,30 +268,18 @@ class VisualizerScreen(Screen):
         self._lineno_map = self._build_lineno_map()
         self._apply_frame(0)
 
-        # Disable focus on hidden tab bar widgets to prevent them from capturing left/right arrow keys
-        tabs = self.query_one("#code-tabs", TabbedContent)
-        for child in tabs.walk_children():
-            if child.__class__.__name__ in ("ContentTabs", "Tabs", "ContentTab", "Tab"):
-                child.can_focus = False
-
         self.query_one("#grid-input", Input).blur()
         self.set_focus(None)
 
-        self.query_one("#left-panel").border_title = "solution"
+        self.query_one("#left-panel").border_title = "problem + solution"
+        self.query_one("#problem-panel").border_title = "problem statement"
+        self.query_one("#solution-panel").border_title = "solution"
         self.query_one("#grid-container").border_title = "visualization"
         self.query_one("#vars-panel").border_title = "variables"
         self.query_one("#legend").border_title = "legend"
         self.query_one("#step-explanation").border_title = "step explanation"
         self.query_one("#input-bar").border_title = "input"
         self.query_one("#bottom-bar").border_title = "playback"
-
-    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
-        if event.tabbed_content.id == "code-tabs":
-            active_id = event.pane.id
-            if active_id == "solution-tab":
-                self.query_one("#left-panel").border_title = "solution"
-            elif active_id == "problem-tab":
-                self.query_one("#left-panel").border_title = "problem"
 
     # ------------------------------------------------------------------
     # Frame navigation
@@ -438,14 +402,7 @@ class VisualizerScreen(Screen):
             self._start_play()
 
     def action_toggle_tab(self) -> None:
-        try:
-            tabs = self.query_one("#code-tabs", TabbedContent)
-        except Exception:
-            return
-        if tabs.active == "solution-tab":
-            tabs.active = "problem-tab"
-        else:
-            tabs.active = "solution-tab"
+        return
 
     def action_focus_input(self) -> None:
         self.query_one("#grid-input", Input).focus()
